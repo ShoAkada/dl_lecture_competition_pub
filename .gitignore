@@ -1,3 +1,5 @@
 dl_competition/
 .history/
 data/
+submission.npy
+model.pth
