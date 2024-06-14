@@ -10,6 +10,9 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms
+from torch.nn.parallel import DataParallel as DP
+from sklearn.model_selection import KFold, train_test_split
+from torch.utils.data.dataset import Subset
 
 
 def set_seed(seed):
@@ -67,6 +70,7 @@ class VQADataset(torch.utils.data.Dataset):
         self.transform = transform  # 画像の前処理
         self.image_dir = image_dir  # 画像ファイルのディレクトリ
         self.df = pandas.read_json(df_path)  # 画像ファイルのパス，question, answerを持つDataFrame
+        print(self.df)
         self.answer = answer
 
         # question / answerの辞書を作成
@@ -290,7 +294,7 @@ def ResNet50():
 class VQAModel(nn.Module):
     def __init__(self, vocab_size: int, n_answer: int):
         super().__init__()
-        self.resnet = ResNet18()
+        self.resnet = ResNet50()
         self.text_encoder = nn.Linear(vocab_size, 512)
 
         self.fc = nn.Sequential(
@@ -336,6 +340,27 @@ def train(model, dataloader, optimizer, criterion, device):
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
 
+def val(model, dataloader, criterion, device):
+    model.eval()
+
+    total_loss = 0
+    total_acc = 0
+    simple_acc = 0
+
+    start = time.time()
+    for image, question, answers, mode_answer in dataloader:
+        image, question, answer, mode_answer = \
+            image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
+
+        pred = model(image, question)
+        loss = criterion(pred, mode_answer)
+
+        total_loss += loss.item()
+        total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
+        simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
+
+    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
+
 def eval(model, dataloader, optimizer, criterion, device):
     model.eval()
 
@@ -362,27 +387,59 @@ def main():
     # deviceの設定
     set_seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"device: {device}")
 
     # dataloader / model
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
-    train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
+    
+        
+    print("loading data...")
+    skf = KFold(n_splits=5)
+    train_val_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
-    test_dataset.update_dict(train_dataset)
+    test_dataset.update_dict(train_val_dataset)
+    print("loading data...done")
+    
+    seed = 0
+    train_index, valid_index = train_test_split(
+        range(len(train_val_dataset)),
+        test_size=0.1,
+        random_state=seed
+    )
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
+    train_dataset = Subset(train_val_dataset, train_index)
+    valid_dataset = Subset(train_val_dataset, valid_index)
+
+    print(f"train dataset: {len(train_dataset)}")
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=256, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=1, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+    print(f"test dataset: {len(test_dataset)}")
 
-    model = VQAModel(vocab_size=len(train_dataset.question2idx)+1, n_answer=len(train_dataset.answer2idx)).to(device)
+    model = VQAModel(vocab_size=len(train_val_dataset.question2idx)+1, n_answer=len(train_val_dataset.answer2idx)).to(device)
+    model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 20
+    num_epoch = 50
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=5,
+        threshold=0.0001,
+        verbose=True
+    )
+    
+    print("start training...")
 
-    # train model
+    # train model with learning rate decay
+    least_val_loss = 10000
     for epoch in range(num_epoch):
         train_loss, train_acc, train_simple_acc, train_time = train(model, train_loader, optimizer, criterion, device)
         print(f"【{epoch + 1}/{num_epoch}】\n"
@@ -390,7 +447,19 @@ def main():
               f"train loss: {train_loss:.4f}\n"
               f"train acc: {train_acc:.4f}\n"
               f"train simple acc: {train_simple_acc:.4f}")
-
+        val_loss, val_acc, val_simple_acc, val_time = val(model, val_loader, criterion, device)
+        print(f"【{epoch + 1}/{num_epoch}】\n"
+            f"val time: {val_time:.2f} [s]\n"
+            f"val loss: {val_loss:.4f}\n"
+            f"val acc: {val_acc:.4f}\n"
+            f"val simple acc: {val_simple_acc:.4f}")
+        if val_loss < least_val_loss:
+            least_val_loss = val_loss
+            print(f"save model at epoch {epoch + 1}")
+            torch.save(model.state_dict(), "best_model.pth")
+        scheduler.step(val_loss)
+        
+    print("start evaluation...")
     # 提出用ファイルの作成
     model.eval()
     submission = []
@@ -402,7 +471,7 @@ def main():
 
     submission = [train_dataset.idx2answer[id] for id in submission]
     submission = np.array(submission)
-    torch.save(model.state_dict(), "model.pth")
+    #torch.save(model.state_dict(), "model.pth")
     np.save("submission.npy", submission)
 
 if __name__ == "__main__":
