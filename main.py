@@ -339,8 +339,8 @@ def train(model, dataloader, optimizer, criterion, device):
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
-
-def val(model, dataloader, criterion, device):
+# 5. 評価の実装
+def eval(model, dataloader, optimizer, criterion, device):
     model.eval()
 
     total_loss = 0
@@ -361,28 +361,28 @@ def val(model, dataloader, criterion, device):
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
-def eval(model, dataloader, optimizer, criterion, device):
-    model.eval()
-
-    total_loss = 0
-    total_acc = 0
-    simple_acc = 0
-
-    start = time.time()
-    for image, question, answers, mode_answer in dataloader:
-        image, question, answer, mode_answer = \
-            image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
-
-        pred = model(image, question)
-        loss = criterion(pred, mode_answer.squeeze())
-
-        total_loss += loss.item()
-        total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
-        simple_acc += (pred.argmax(1) == mode_answer).mean().item()  # simple accuracy
-
-    return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
-
-
+def test(test_loader, device, train_val_dataset, train_dataset):
+    print("start evaluation...")
+    print(train_dataset)
+    # 提出用ファイルの作成
+    state_dict = torch.load("best_model.pth", map_location=torch.device(device))
+    test_model = DP(VQAModel(vocab_size=len(train_val_dataset.question2idx)+1, n_answer=len(train_val_dataset.answer2idx)).to(device))
+    test_model.load_state_dict(state_dict)
+    test_model.eval()
+    submission = []
+    for image, question in test_loader:
+        image, question = image.to(device), question.to(device)
+        pred = test_model(image, question)
+        pred = pred.argmax(1).cpu().item()
+        submission.append(pred)
+        
+    print(submission)
+    submission = [train_dataset.idx2answer[id] for id in submission]
+    submission = np.array(submission)
+    #torch.save(model.state_dict(), "model.pth")
+    np.save("submission.npy", submission)
+    print("start evaluation...done")
+    
 def main():
     # deviceの設定
     set_seed(42)
@@ -397,7 +397,6 @@ def main():
     
         
     print("loading data...")
-    skf = KFold(n_splits=5)
     train_val_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
     test_dataset.update_dict(train_val_dataset)
@@ -423,7 +422,7 @@ def main():
     model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 50
+    num_epoch = 200
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
     
@@ -440,6 +439,7 @@ def main():
 
     # train model with learning rate decay
     least_val_loss = 10000
+    test(test_loader, device, train_val_dataset, train_dataset)
     for epoch in range(num_epoch):
         train_loss, train_acc, train_simple_acc, train_time = train(model, train_loader, optimizer, criterion, device)
         print(f"【{epoch + 1}/{num_epoch}】\n"
@@ -447,32 +447,23 @@ def main():
               f"train loss: {train_loss:.4f}\n"
               f"train acc: {train_acc:.4f}\n"
               f"train simple acc: {train_simple_acc:.4f}")
-        val_loss, val_acc, val_simple_acc, val_time = val(model, val_loader, criterion, device)
-        print(f"【{epoch + 1}/{num_epoch}】\n"
+        val_loss, val_acc, val_simple_acc, val_time = eval(model, val_loader, optimizer, criterion, device)
+        print(
             f"val time: {val_time:.2f} [s]\n"
             f"val loss: {val_loss:.4f}\n"
             f"val acc: {val_acc:.4f}\n"
-            f"val simple acc: {val_simple_acc:.4f}")
+            f"val simple acc: {val_simple_acc:.4f}"
+            )
         if val_loss < least_val_loss:
             least_val_loss = val_loss
             print(f"save model at epoch {epoch + 1}")
             torch.save(model.state_dict(), "best_model.pth")
+    
         scheduler.step(val_loss)
+    
+    test(test_loader, device, train_val_dataset, train_dataset)
         
-    print("start evaluation...")
-    # 提出用ファイルの作成
-    model.eval()
-    submission = []
-    for image, question in test_loader:
-        image, question = image.to(device), question.to(device)
-        pred = model(image, question)
-        pred = pred.argmax(1).cpu().item()
-        submission.append(pred)
 
-    submission = [train_dataset.idx2answer[id] for id in submission]
-    submission = np.array(submission)
-    #torch.save(model.state_dict(), "model.pth")
-    np.save("submission.npy", submission)
 
 if __name__ == "__main__":
     main()

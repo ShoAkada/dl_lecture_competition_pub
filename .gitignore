@@ -3,3 +3,5 @@ dl_competition/
 data/
 submission.npy
 model.pth
+工夫した点.*
+best_model.pth
