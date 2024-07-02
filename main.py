@@ -389,15 +389,23 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 
+    # 画像前処理でグレースケールに変換（学習，テスト共通）
+    transform_train = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.Grayscale(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+        ])
     # dataloader / model
     transform = transforms.Compose([
+        transforms.Grayscale(),
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
     
         
     print("loading data...")
-    train_val_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
+    train_val_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform_train)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
     test_dataset.update_dict(train_val_dataset)
     print("loading data...done")
