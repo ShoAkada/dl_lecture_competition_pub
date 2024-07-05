@@ -245,7 +245,7 @@ class ResNet(nn.Module):
         super().__init__()
         self.in_channels = 64
 
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -257,6 +257,7 @@ class ResNet(nn.Module):
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, 512)
+        self.dropout = nn.Dropout(0.2)
 
     def _make_layer(self, block, blocks, out_channels, stride=1):
         layers = []
@@ -272,12 +273,16 @@ class ResNet(nn.Module):
         x = self.maxpool(x)
 
         x = self.layer1(x)
+        x = self.dropout(x)
         x = self.layer2(x)
+        x = self.dropout(x)
         x = self.layer3(x)
+        x = self.dropout(x)
         x = self.layer4(x)
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
+        x = self.dropout(x)
         x = self.fc(x)
 
         return x
@@ -298,6 +303,7 @@ class VQAModel(nn.Module):
         self.text_encoder = nn.Linear(vocab_size, 512)
 
         self.fc = nn.Sequential(
+            nn.Dropout(0.2),
             nn.Linear(1024, 512),
             nn.ReLU(inplace=True),
             nn.Linear(512, n_answer)
@@ -430,9 +436,9 @@ def main():
     model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 200
+    num_epoch = 100
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -447,7 +453,7 @@ def main():
 
     # train model with learning rate decay
     least_val_loss = 10000
-    test(test_loader, device, train_val_dataset, train_dataset)
+    #test(test_loader, device, train_val_dataset, train_dataset)
     for epoch in range(num_epoch):
         train_loss, train_acc, train_simple_acc, train_time = train(model, train_loader, optimizer, criterion, device)
         print(f"【{epoch + 1}/{num_epoch}】\n"
@@ -467,7 +473,7 @@ def main():
             print(f"save model at epoch {epoch + 1}")
             torch.save(model.state_dict(), "best_model.pth")
     
-        scheduler.step(val_loss)
+        # scheduler.step(val_loss)
     
     test(test_loader, device, train_val_dataset, train_dataset)
         
