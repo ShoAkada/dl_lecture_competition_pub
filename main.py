@@ -220,6 +220,7 @@ class BottleneckBlock(nn.Module):
         self.conv3 = nn.Conv2d(out_channels, out_channels * self.expansion, kernel_size=1, stride=1)
         self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
         self.relu = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(0.5)
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels * self.expansion:
@@ -232,7 +233,8 @@ class BottleneckBlock(nn.Module):
         residual = x
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
+        # Blockの最後の畳み込み層の前にドロップアウト層を追加
+        out = self.bn3(self.dropout(self.conv3(out)))
 
         out += self.shortcut(residual)
         out = self.relu(out)
@@ -303,7 +305,7 @@ class VQAModel(nn.Module):
         self.text_encoder = nn.Linear(vocab_size, 512)
 
         self.fc = nn.Sequential(
-            nn.Dropout(0.2),
+            nn.Dropout(0.5),
             nn.Linear(1024, 512),
             nn.ReLU(inplace=True),
             nn.Linear(512, n_answer)
@@ -354,22 +356,22 @@ def eval(model, dataloader, optimizer, criterion, device):
     simple_acc = 0
 
     start = time.time()
-    for image, question, answers, mode_answer in dataloader:
-        image, question, answer, mode_answer = \
-            image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
+    with torch.no_grad():
+        for image, question, answers, mode_answer in dataloader:
+            image, question, answer, mode_answer = \
+                image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
 
-        pred = model(image, question)
-        loss = criterion(pred, mode_answer)
+            pred = model(image, question)
+            loss = criterion(pred, mode_answer)
 
-        total_loss += loss.item()
-        total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
-        simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
+            total_loss += loss.item()
+            total_acc += VQA_criterion(pred.argmax(1), answers)  # VQA accuracy
+            simple_acc += (pred.argmax(1) == mode_answer).float().mean().item()  # simple accuracy
 
     return total_loss / len(dataloader), total_acc / len(dataloader), simple_acc / len(dataloader), time.time() - start
 
 def test(test_loader, device, train_val_dataset, train_dataset):
-    print("start evaluation...")
-    print(train_dataset)
+    print("start test...")
     # 提出用ファイルの作成
     state_dict = torch.load("best_model.pth", map_location=torch.device(device))
     test_model = DP(VQAModel(vocab_size=len(train_val_dataset.question2idx)+1, n_answer=len(train_val_dataset.answer2idx)).to(device))
@@ -383,11 +385,11 @@ def test(test_loader, device, train_val_dataset, train_dataset):
         submission.append(pred)
         
     print(submission)
-    submission = [train_dataset.idx2answer[id] for id in submission]
+    submission = [train_dataset.dataset.idx2answer[id] for id in submission]
     submission = np.array(submission)
     #torch.save(model.state_dict(), "model.pth")
     np.save("submission.npy", submission)
-    print("start evaluation...done")
+    print("start tset...done")
     
 def main():
     # deviceの設定
@@ -398,6 +400,8 @@ def main():
     # 画像前処理でグレースケールに変換（学習，テスト共通）
     transform_train = transforms.Compose([
         transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(degrees=(-30, 30)),
         transforms.Grayscale(),
         transforms.Resize((224, 224)),
         transforms.ToTensor()
@@ -436,7 +440,7 @@ def main():
     model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 100
+    num_epoch = 10
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
     
