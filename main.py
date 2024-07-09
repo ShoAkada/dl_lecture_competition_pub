@@ -247,7 +247,7 @@ class ResNet(nn.Module):
         super().__init__()
         self.in_channels = 64
 
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -402,13 +402,13 @@ def main():
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(degrees=(-30, 30)),
-        transforms.Grayscale(),
+        # transforms.Grayscale(),
         transforms.Resize((224, 224)),
         transforms.ToTensor()
         ])
     # dataloader / model
     transform = transforms.Compose([
-        transforms.Grayscale(),
+        # transforms.Grayscale(),
         transforms.Resize((224, 224)),
         transforms.ToTensor()
     ])
@@ -420,15 +420,17 @@ def main():
     test_dataset.update_dict(train_val_dataset)
     print("loading data...done")
     
+    # 学習用と評価用にランダムにデータ分割する
     seed = 0
     train_index, valid_index = train_test_split(
         range(len(train_val_dataset)),
         test_size=0.1,
         random_state=seed
     )
-
     train_dataset = Subset(train_val_dataset, train_index)
     valid_dataset = Subset(train_val_dataset, valid_index)
+    valid_dataset.dataset.transform = transform
+    print(valid_dataset.dataset.transform)
 
     print(f"train dataset: {len(train_dataset)}")
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=256, shuffle=True)
@@ -440,18 +442,9 @@ def main():
     model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 10
+    num_epoch = 100
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
-    
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=0.5,
-        patience=5,
-        threshold=0.0001,
-        verbose=True
-    )
     
     print("start training...")
 
