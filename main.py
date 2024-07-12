@@ -442,7 +442,7 @@ def main():
     model = DP(model)
 
     # optimizer / criterion
-    num_epoch = 100
+    num_epoch = 20
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
     
